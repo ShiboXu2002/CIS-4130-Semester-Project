@@ -1,0 +1,385 @@
+# Code for downloading dataset from Kaggle to AWS S3 Bucket:
+
+# Code for downloading to EC2 Connect from Kaggle:
+# kaggle datasets download -d cynthiarempel/amazon-us-customer-reviews-dataset
+
+# Code for file list: kaggle datasets files
+# cynthiarempel/amazon-us-customer-reviews-dataset
+
+# Code for unzipping files:
+# unzip amazon-us-customer-reviews-dataset.zip. <file name>
+# Example: unzin amazon_us-customer_reviews-datasetrin amazon_reviews_multilingual_US_v1_00.tsv
+
+# Code for downloading file to S3 Bucket:
+# aws s3 cp <file name> s3://<Bucket Name>/landing/<file name>
+# Example: aws s3 cp < amazon_reviews_us_Baby_v1_00.tsv> s3://<my-big-data-sx>/landing/< amazon_reviews_us_Baby_v1_00.tsv>
+
+# Code for removing uploaded file:
+# rm <file name>
+# Example: rm amazon_reviews_us_Baby_v1_00.tsv
+
+# Basically, we did this part on AWS Instance, so we used the code for AWS Instance.
+# Because the dataset size is too large, we divided it into different files, and then do the unzipping, downloading, and removing for each file.
+
+
+Code for EDA:
+
+import boto3
+import pandas as pd
+import matplotlib.pyplot as plt
+
+aws_access_key_id = 'AKIJDJNAOD633PPF'
+aws_secret_access_key = 'f3OtK6JKJNJOLKKKB3r2JrH0Pb4ftV'
+bucket_name = 'my-bigdata-project-sx'
+
+s3 = boto3.client('s3',
+    aws_access_key_id=aws_access_key_id,
+    aws_secret_access_key=aws_secret_access_key,
+)
+
+def perform_eda(file_key):
+    # Download the file from S3
+    s3.download_file(bucket_name, file_key, 'data.csv')
+
+    try:
+        df = pd.read_csv('data.csv', delimiter='\t')
+        
+        # Perform EDA on the DataFrame
+        print("File:", file_key)
+
+        # Show the first few rows of the dataset
+        print(df.head())
+
+        # Number of observations and variables
+        num_observations, num_variables = df.shape
+        print(f'Number of Observations: {num_observations}')
+        print(f'Number of Variables: {num_variables}')
+
+        # List of variable names
+        variable_names = df.columns.tolist()
+        print('Variable Names:', variable_names)
+
+        # Missing data
+        missing_data = df.isnull().sum()
+        print('Missing Data:')
+        print(missing_data)
+
+        # Descriptive statistics for numeric variables
+        numeric_stats = df.describe()
+
+        # Convert 'review_date' to a datetime object
+        df['review_date'] = pd.to_datetime(df['review_date'])
+
+        # Calculate the minimum and maximum dates
+        min_date = df['review_date'].min()
+        max_date = df['review_date'].max()
+
+        # Output the minimum and maximum dates
+        print('Min Date:', min_date)
+        print('Max Date:', max_date)
+
+        # Count the number of words in the 'review_body' column
+        df['word_count'] = df['review_body'].apply(lambda x: len(str(x).split()))
+
+        # Get statistics about the word count
+        text_stats = df['word_count'].describe()
+
+        # Output the statistics
+        print(text_stats)
+
+        # Create a histogram of 'star_rating'
+        plt.hist(df['star_rating'], bins=20)
+        plt.xlabel('Star Rating')
+        plt.ylabel('Frequency')
+        plt.title('Histogram of Star Ratings')
+        plt.show()
+
+    except pd.errors.ParserError as e:
+        print(f"Error reading the file: {e}")
+        print(f"Skipping file: {file_key}")
+
+# List of file names to process
+file_names = [
+    'landing/amazon_reviews_us_Gift_Card_v1_00.tsv',
+    'landing/amazon_reviews_us_Personal_Care_Appliances_v1_00.tsv',
+    'landing/amazon_reviews_us_Digital_Software_v1_00.tsv',
+    'landing/amazon_reviews_us_Mobile_Electronics_v1_00.tsv',
+    'landing/amazon_reviews_us_Major_Appliances_v1_00.tsv',
+    'landing/amazon_reviews_us_Digital_Video_Games_v1_00.tsv',
+    'landing/amazon_reviews_us_Software_v1_00.tsv',
+    # Add more file names as needed
+]
+
+# Loop through the file names and perform EDA for each file
+for file_name in file_names:
+perform_eda(file_name)
+
+
+
+Code for Data Cleaning:
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("DataCleaning").getOrCreate()
+
+# Define schema for your data
+schema = StructType([
+    StructField("marketplace", StringType(), True),
+    StructField("customer_id", IntegerType(), True),
+    StructField("review_id", StringType(), True),
+    StructField("product_id", StringType(), True),
+    StructField("product_parent", IntegerType(), True),
+    StructField("product_title", StringType(), True),
+    StructField("product_category", StringType(), True),
+    StructField("star_rating", IntegerType(), True),
+    StructField("helpful_votes", IntegerType(), True),
+    StructField("total_votes", IntegerType(), True),
+    StructField("vine", StringType(), True),
+    StructField("verified_purchase", StringType(), True),
+    StructField("review_headline", StringType(), True),
+    StructField("review_body", StringType(), True),
+    StructField("review_date", DateType(), True),
+])
+
+# Read data from landing folder
+# Change the file name after the completion of one file.
+raw_data = spark.read.csv("s3://my-bigdata-project-sx/landing/amazon_reviews_us_Wireless_v1_00.tsv", header=True, schema=schema, sep='\t')
+
+# Remove unnecessary columns
+selected_columns = ["star_rating", "helpful_votes", "total_votes"]
+cleaned_data = raw_data.select(selected_columns)
+
+# Drop records with null values
+cleaned_data = cleaned_data.dropna()
+
+# Write the cleaned data to the specified Parquet file path
+# Change the file name after the completion of one file.
+output_file_path = "s3://my-bigdata-project-sx/raw/cleaned_amazon_reviews_us_Wireless_v1_00.parquet"
+cleaned_data.write.parquet(output_file_path, mode="overwrite")
+
+# Stop Spark session
+spark.stop()
+
+
+
+Code for featuring and modeling:
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml import Pipeline
+from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+
+# Read data from S3 Parquet file
+s3_bucket_path = "s3://my-bigdata-project-sx/raw/cleaned_amazon_reviews_us_Gift_Card_v1_00.parquet"
+sdf = spark.read.parquet(s3_bucket_path)
+
+# Convert star rating to binary labels
+sdf = sdf.withColumn("label", when(col("star_rating") > 3, 1.0).otherwise(0.0))
+
+indexer = StringIndexer(inputCols=["label"], outputCols=["labelIndex"], handleInvalid="keep")
+assembler = VectorAssembler(inputCols=['helpful_votes', 'total_votes'], outputCol="features")
+
+# Create a Logistic Regression Estimator
+logistic_reg = LogisticRegression(labelCol='label', featuresCol='features')
+
+# Create a binary classification evaluator
+evaluator = BinaryClassificationEvaluator(labelCol='label', metricName='areaUnderROC')
+
+# Create the pipeline. Indexer is stage 0, Logistic Regression (logistic_reg) is stage 3.
+classification_pipe = Pipeline(stages=[indexer, assembler, logistic_reg])
+
+# Split the data into training and test sets
+trainingData, testData = sdf.randomSplit([0.70, 0.3], seed=42)
+
+# Create a grid for hyperparameter tuning
+grid = ParamGridBuilder() \
+    .addGrid(logistic_reg.regParam, [0.1, 0.01]) \
+    .addGrid(logistic_reg.elasticNetParam, [0.0, 0.5, 1.0]) \
+    .build()
+
+# Create the CrossValidator using the hyperparameter grid
+cv = CrossValidator(estimator=classification_pipe, estimatorParamMaps=grid, evaluator=evaluator, numFolds=3)
+
+# Train the models
+all_models = cv.fit(trainingData)
+
+# Get the best model from all of the models trained
+bestModel = all_models.bestModel
+
+# Use the model 'bestModel' to predict the test set
+test_results = bestModel.transform(testData)
+
+# Show the predicted label and probability
+test_results.select('helpful_votes', 'total_votes', 'label', 'prediction', 'probability').show(truncate=False)
+
+# Evaluate the model using the area under the ROC curve
+roc_auc = evaluator.evaluate(test_results)
+print(f"Area Under ROC: {roc_auc}")
+
+# Save processed data to /trusted folder
+# Replace the file after each completeion
+processed_data_path = "s3://my-bigdata-project-sx/trusted/trusted_amazon_reviews_us_Wireless_v1_00.parquet"
+sdf.write.mode("overwrite").parquet(processed_data_path)
+
+# Save the best model to /models folder
+# Replace the file after each completeion
+model_path = "s3://my-bigdata-project-sx/models/models_amazon_reviews_us_Wireless_v1_00"
+bestModel.write().overwrite().save(model_path)
+
+
+
+Code for Visulization:
+# pie chart
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+import matplotlib.pyplot as plt
+
+# Create Spark session
+spark = SparkSession.builder.appName("pie-chart").getOrCreate()
+
+# Read parquet file from S3 Bucket
+s3_bucket_path = "s3://my-bigdata-project-sx/raw/cleaned_amazon_reviews_us_Wireless_v1_00.parquet"
+sdf = spark.read.parquet(s3_bucket_path)
+
+# Select columns
+selected_columns = ["star_rating", "helpful_votes", "total_votes"]
+sdf_selected = sdf.select(selected_columns)
+
+# Count the number of star_rating, helpful_votes, and total_votes
+star_rating_counts = sdf_selected.groupBy("star_rating").count().orderBy("star_rating")
+helpful_votes_counts = sdf_selected.groupBy("helpful_votes").count().orderBy("helpful_votes")
+total_votes_counts = sdf_selected.groupBy("total_votes").count().orderBy("total_votes")
+
+# Transform data to Pandas DataFrame for drawing
+star_rating_df = star_rating_counts.toPandas()
+helpful_votes_df = helpful_votes_counts.toPandas()
+total_votes_df = total_votes_counts.toPandas()
+
+# Drawing
+plt.figure(figsize=(15, 5))
+
+# Drawing for star_rating
+plt.subplot(1, 3, 1)
+plt.pie(star_rating_df["count"], labels=star_rating_df["star_rating"], autopct='%1.1f%%', startangle=140)
+plt.title('Star Rating Distribution')
+
+# Drawing for helpful_votes
+plt.subplot(1, 3, 2)
+plt.pie(helpful_votes_df["count"], labels=helpful_votes_df["helpful_votes"], autopct='%1.1f%%', startangle=140)
+plt.title('Helpful Votes Distribution')
+
+# Drawing fortotal_votes
+plt.subplot(1, 3, 3)
+plt.pie(total_votes_df["count"], labels=total_votes_df["total_votes"], autopct='%1.1f%%', startangle=140)
+plt.title('Total Votes Distribution')
+
+# Show
+plt.show()
+
+
+# bar graph
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+import matplotlib.pyplot as plt
+
+# Create Spark session
+spark = SparkSession.builder.appName("bar_plot").getOrCreate()
+
+# Read parquet file from S3 Bucket
+s3_bucket_path = "s3://my-bigdata-project-sx/raw"
+sdf = spark.read.parquet(s3_bucket_path)
+
+# Select columns
+selected_columns = ["helpful_votes"]
+sdf_selected = sdf.select(selected_columns)
+
+# Count the number of each numeric value
+helpful_votes_counts = sdf_selected.groupBy("helpful_votes").count().orderBy("helpful_votes")
+
+# Transform data to Pandas DataFrame for drawing
+helpful_votes_df = helpful_votes_counts.toPandas()
+
+# Drawing
+plt.figure(figsize=(10, 5))
+plt.bar(helpful_votes_df["helpful_votes"], helpful_votes_df["count"])
+plt.xlabel("Helpful Votes")
+plt.ylabel("Count")
+plt.title("Distribution of Helpful Votes")
+plt.show()
+
+
+# scatter plot
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+import matplotlib.pyplot as plt
+
+# Create Spark session
+spark = SparkSession.builder.appName("scatter_plot").getOrCreate()
+
+# Read parquet file from S3 Bucket
+s3_bucket_path = "s3://my-bigdata-project-sx/raw/cleaned_amazon_reviews_us_Gift_Card_v1_00.parquet/"
+sdf = spark.read.parquet(s3_bucket_path)
+
+# Select columns
+selected_columns = ["total_votes", "helpful_votes"]
+sdf_selected = sdf.select(selected_columns)
+
+# Transform data to Pandas DataFrame for drawing
+scatter_df = sdf_selected.toPandas()
+
+# Drawing
+plt.figure(figsize=(10, 5))
+plt.scatter(scatter_df["total_votes"], scatter_df["helpful_votes"])
+plt.xlabel("Total Votes")
+plt.ylabel("Helpful Votes")
+plt.title("Scatter Plot of Total Votes vs Helpful Votes")
+plt.show()
+
+
+# correlation martix
+import pandas as pd
+import seaborn as sns
+from pyspark.sql import SparkSession
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.stat import Correlation
+import matplotlib.pyplot as plt
+
+# Create Spark session
+spark = SparkSession.builder.appName("correlation_matrix").getOrCreate()
+
+# Read data from S3 Parquet file
+s3_bucket_path = "s3://my-bigdata-project-sx/raw/cleaned_amazon_reviews_us_Gift_Card_v1_00.parquet/"
+sdf = spark.read.parquet(s3_bucket_path)
+
+# Your numeric columns
+numeric_columns = ['star_rating', 'helpful_votes', 'total_votes']
+
+# Use a vector assembler to combine all of the numeric columns together
+vector_column = "correlation_features"
+assembler = VectorAssembler(inputCols=numeric_columns, outputCol=vector_column)
+sdf_vector = assembler.transform(sdf).select(vector_column)
+
+# Create the correlation matrix, then get just the values and convert to a list
+matrix = Correlation.corr(sdf_vector, vector_column).collect()[0][0]
+correlation_matrix = matrix.toArray().tolist()
+
+# Convert the correlation to a Pandas dataframe
+correlation_matrix_df = pd.DataFrame(data=correlation_matrix, columns=numeric_columns, index=numeric_columns)
+
+# Set Seaborn style
+sns.set_style("white")
+
+# Create the plot using Seaborn
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix_df, xticklabels=correlation_matrix_df.columns.values,
+            yticklabels=correlation_matrix_df.columns.values, cmap="Greens", annot=True)
+
+# Save the plot as an image
+plt.savefig("correlation_matrix.png")
+plt.show()
+
+# I had hide the security keys, passwords, credentials for sercurity.
