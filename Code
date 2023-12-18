@@ -28,8 +28,8 @@ import boto3
 import pandas as pd
 import matplotlib.pyplot as plt
 
-aws_access_key_id = 'AKIJDJNAOD633PPF'
-aws_secret_access_key = 'f3OtK6JKJNJOLKKKB3r2JrH0Pb4ftV'
+aws_access_key_id = 'ABCDE.....'
+aws_secret_access_key = '12345.....'
 bucket_name = 'my-bigdata-project-sx'
 
 s3 = boto3.client('s3',
